@@ -8,9 +8,9 @@ from common.layers import api_model_conversion
 from tensordict import TensorDict
 
 
-class TDMPC2(torch.nn.Module):
+class DSTL(torch.nn.Module):
 	"""
-	TD-MPC2 agent. Implements training + inference.
+	DSTL agent. Implements training + inference.
 	Can be used for both single-task and multi-task experiments,
 	and supports both state and pixel observations.
 	"""
