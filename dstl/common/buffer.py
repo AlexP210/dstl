@@ -12,7 +12,7 @@ class Buffer():
 
 	def __init__(self, cfg):
 		self.cfg = cfg
-		self._device = torch.device('cuda:0')
+		self._device = torch.device(self.cfg.device)
 		self._capacity = min(cfg.buffer_size, cfg.steps)
 		self._sampler = SliceSampler(
 			num_slices=self.cfg.batch_size,
@@ -20,7 +20,7 @@ class Buffer():
 			traj_key='episode',
 			truncated_key=None,
 			strict_length=True,
-			cache_values=cfg.multitask,
+			cache_values=False,
 		)
 		self._batch_size = cfg.batch_size * (cfg.horizon+1)
 		self._num_eps = 0
@@ -59,7 +59,7 @@ class Buffer():
 		total_bytes = bytes_per_step*self._capacity
 		print(f'Storage required: {total_bytes/1e9:.2f} GB')
 		# Heuristic: decide whether to use CUDA or CPU memory
-		storage_device = 'cuda:0' if 2.5*total_bytes < mem_free else 'cpu'
+		storage_device = self.cfg.device if 2.5*total_bytes < mem_free else 'cpu'
 		print(f'Using {storage_device.upper()} memory for storage.')
 		self._storage_device = torch.device(storage_device)
 		return self._reserve_buffer(
@@ -95,7 +95,7 @@ class Buffer():
 		Prepare a sampled batch for training (post-processing).
 		Expects `td` to be a TensorDict with batch size TxB.
 		"""
-		td = td.select("obs", "action", "reward", "terminated", "task", strict=False).to(self._device, non_blocking=True)
+		td = td.select("obs", "action", "reward", "terminated", strict=False).to(self._device, non_blocking=True)
 		obs = td.get('obs').contiguous()
 		action = td.get('action')[1:].contiguous()
 		reward = td.get('reward')[1:].unsqueeze(-1).contiguous()
@@ -104,10 +104,7 @@ class Buffer():
 			terminated = td.get('terminated')[1:].unsqueeze(-1).contiguous()
 		else:
 			terminated = torch.zeros_like(reward)
-		task = td.get('task', None)
-		if task is not None:
-			task = task[0].contiguous()
-		return obs, action, reward, terminated, task
+		return obs, action, reward, terminated
 
 	def sample(self):
 		"""Sample a batch of subsequences from the buffer."""

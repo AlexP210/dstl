@@ -5,6 +5,7 @@ import re
 
 import numpy as np
 import pandas as pd
+import h5py
 from termcolor import colored
 
 from dstl.common import TASK_SET
@@ -80,7 +81,7 @@ class VideoRecorder:
 
 	def __init__(self, cfg, wandb, fps=15):
 		self.cfg = cfg
-		self._save_dir = make_dir(cfg.work_dir / 'eval_video')
+		self._save_dir = make_dir(os.path.join(cfg.work_dir, 'eval_video'))
 		self._wandb = wandb
 		self.fps = fps
 		self.frames = []
@@ -107,8 +108,9 @@ class Logger:
 	"""Primary logging object. Logs either locally or using wandb."""
 
 	def __init__(self, cfg):
+		self.cfg = cfg
 		self._log_dir = make_dir(cfg.work_dir)
-		self._model_dir = make_dir(self._log_dir / "models")
+		self._model_dir = make_dir(os.path.join(self._log_dir, "models"))
 		self._save_csv = cfg.save_csv
 		self._save_agent = cfg.save_agent
 		self._group = cfg_to_group(cfg)
@@ -117,6 +119,15 @@ class Logger:
 		print_run(cfg)
 		self.project = cfg.get("wandb_project", "none")
 		self.entity = cfg.get("wandb_entity", "none")
+
+		self.save_training_data = cfg.save_training_data
+		self._training_dataset = None
+		if self.save_training_data:
+			save_dir = os.path.join(self._log_dir, "data")
+			make_dir(save_dir)
+			save_path = os.path.join(save_dir, "training.h5")
+			self._training_dataset = self.create_transition_dataset(path=save_path)
+		
 		if not cfg.enable_wandb or self.project == "none" or self.entity == "none":
 			print(colored("Wandb disabled.", "blue", attrs=["bold"]))
 			cfg.save_agent = False
@@ -127,10 +138,11 @@ class Logger:
 		os.environ["WANDB_SILENT"] = "true" if cfg.wandb_silent else "false"
 		import wandb
 
+		agent, task, seed = self._log_dir.split(os.sep)[-4:-1]
 		wandb.init(
 			project=self.project,
 			entity=self.entity,
-			name=str(cfg.seed),
+			name=f"{agent} {task} {seed}",
 			group=self._group,
 			tags=cfg_to_group(cfg, return_list=True) + [f"seed:{cfg.seed}"],
 			dir=self._log_dir,
@@ -154,7 +166,7 @@ class Logger:
 
 	def save_agent(self, agent=None, identifier='final'):
 		if self._save_agent and agent:
-			fp = self._model_dir / f'{str(identifier)}.pt'
+			fp = os.path.join(self._model_dir, f'{str(identifier)}.pt')
 			agent.save(fp)
 			if self._wandb:
 				artifact = self._wandb.Artifact(
@@ -171,6 +183,12 @@ class Logger:
 			print(colored(f"Failed to save model: {e}", "red"))
 		if self._wandb:
 			self._wandb.finish()
+		if self.save_training_data:
+			final_size = self._transitions_collected
+			for key in self._training_dataset:
+				ds = self._training_dataset[key]
+				ds.resize((final_size, *ds.shape[1:]))
+			self._training_dataset.close()
 
 	def _format(self, key, value, ty):
 		if ty == "int":
@@ -236,6 +254,75 @@ class Logger:
 			keys = ["step", "episode_reward"]
 			self._eval.append(np.array([d[keys[0]], d[keys[1]]]))
 			pd.DataFrame(np.array(self._eval)).to_csv(
-				self._log_dir / "eval.csv", header=keys, index=None
+				os.path.join(self._log_dir, "eval.csv"), header=keys, index=None
 			)
 		self._print(d, category)
+
+	def create_transition_dataset(self, path):
+		dataset = h5py.File(path, "w")
+		z_dataset = dataset.create_dataset(
+			name="z", 
+			shape=(self.cfg.steps, self.cfg.latent_dim),
+			maxshape=(None, self.cfg.latent_dim),
+			chunks=(1024, self.cfg.latent_dim),
+			dtype="float32"
+		)
+		a_dataset = dataset.create_dataset(
+			name="a", 
+			shape=(self.cfg.steps, self.cfg.action_dim),
+			maxshape=(None, self.cfg.action_dim),
+			chunks=(1024, self.cfg.action_dim),
+			dtype="float32"
+		)
+		r_dataset = dataset.create_dataset(
+			name="r", 
+			shape=(self.cfg.steps, 1),
+			maxshape=(None, 1),
+			chunks=(1024, 1),
+			dtype="float32"
+		)
+		zprime_dataset = dataset.create_dataset(
+			name="z'", 
+			shape=(self.cfg.steps, self.cfg.latent_dim),
+			maxshape=(None, self.cfg.latent_dim),
+			chunks=(1024, self.cfg.latent_dim),
+			dtype="float32"
+		)
+		terminated_dataset = dataset.create_dataset(
+			name="terminated", 
+			shape=(self.cfg.steps, 1),
+			maxshape=(None, 1),
+			chunks=(1024, 1),
+			dtype="bool"
+		)
+		truncated_dataset = dataset.create_dataset(
+			name="truncated", 
+			shape=(self.cfg.steps, 1),
+			maxshape=(None, 1),
+			chunks=(1024, 1),
+			dtype="bool"
+		)
+		self._transitions_collected = 0
+		return dataset
+
+	def _ensure_capacity_for_transition_data(self):
+		if self._transitions_collected < self._training_dataset["z"].shape[0]:
+			return
+
+		# grow geometrically
+		old_size = self._training_dataset["z"].shape[0]
+		new_size = int(old_size * 1.5)
+
+		for key in self._training_dataset:
+			ds = self._training_dataset[key]
+			ds.resize((new_size, *ds.shape[1:]))
+
+	def log_transition(self, z, a, r, z_prime, terminated, truncated):
+		self._ensure_capacity_for_transition_data()
+		self._training_dataset["z"][self._transitions_collected] = z.detach().cpu().numpy()
+		self._training_dataset["a"][self._transitions_collected] = a.detach().cpu().numpy()
+		self._training_dataset["r"][self._transitions_collected] = r.detach().cpu().numpy()
+		self._training_dataset["z'"][self._transitions_collected] = z_prime.detach().cpu().numpy()
+		self._training_dataset["terminated"][self._transitions_collected] = terminated.detach().cpu().numpy()
+		self._training_dataset["truncated"][self._transitions_collected] = truncated.detach().cpu().numpy()
+		self._transitions_collected += 1

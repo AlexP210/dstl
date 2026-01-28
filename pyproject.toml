@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dstl"
+version = "0.1.0"
+description = "DSTL: Distilling Specialized Task Latents"
+authors = [
+    { name = "DSTL Authors", email = "alex.pleava@gmail.com" }
+]
+dependencies = [
+    "torch>=1.8.0",
+    "numpy",
+    "gym",
+    "pyyaml",
+]
+
+[tool.setuptools]
+packages = { find = {} }
+include-package-data = true
+
+[tool.setuptools.package-data]
+dstl = ["config.yaml"]

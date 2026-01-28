@@ -10,14 +10,14 @@ import torch
 import hydra
 from termcolor import colored
 
-from common.parser import parse_cfg
-from common.seed import set_seed
-from common.buffer import Buffer
-from envs import make_env
-from tdmpc2 import TDMPC2
-from trainer.offline_trainer import OfflineTrainer
-from trainer.online_trainer import OnlineTrainer
-from common.logger import Logger
+from dstl.common.parser import parse_cfg
+from dstl.common.seed import set_seed
+from dstl.common.buffer import Buffer
+from dstl.envs import make_env
+from dstl import DSTL
+from dstl.trainer.offline_trainer import OfflineTrainer
+from dstl.trainer.online_trainer import OnlineTrainer
+from dstl.common.logger import Logger
 
 torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')
@@ -53,7 +53,7 @@ def train(cfg: dict):
 	trainer = trainer_cls(
 		cfg=cfg,
 		env=make_env(cfg),
-		agent=TDMPC2(cfg),
+		agent=DSTL(cfg),
 		buffer=Buffer(cfg),
 		logger=Logger(cfg),
 	)

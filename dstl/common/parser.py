@@ -6,7 +6,7 @@ from typing import Any
 import hydra
 from omegaconf import OmegaConf
 
-from common import MODEL_SIZE, TASK_SET
+from dstl.common import MODEL_SIZE, TASK_SET
 
 
 def cfg_to_dataclass(cfg, frozen=False):
@@ -54,7 +54,6 @@ def parse_cfg(cfg: OmegaConf) -> OmegaConf:
 			pass
 
 	# Convenience
-	cfg.work_dir = Path(hydra.utils.get_original_cwd()) / 'logs' / cfg.task / str(cfg.seed) / cfg.exp_name
 	cfg.task_title = cfg.task.replace("-", " ").title()
 	cfg.bin_size = (cfg.vmax - cfg.vmin) / (cfg.num_bins-1) # Bin size for discrete regression
 

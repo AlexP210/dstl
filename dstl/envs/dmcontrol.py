@@ -4,7 +4,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 
-from envs.tasks import cheetah, walker, hopper, reacher, ball_in_cup, pendulum, fish
+from dstl.envs.tasks import cheetah, walker, hopper, reacher, ball_in_cup, pendulum, fish
 from dm_control import suite
 suite.ALL_TASKS = suite.ALL_TASKS + suite._get_tasks('custom')
 suite.TASKS_BY_DOMAIN = suite._get_tasks_by_domain(suite.ALL_TASKS)

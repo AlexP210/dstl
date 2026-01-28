@@ -1,6 +1,6 @@
 import numpy as np
 import gymnasium as gym
-from envs.wrappers.timeout import Timeout
+from dstl.envs.wrappers.timeout import Timeout
 
 
 MUJOCO_TASKS = {
