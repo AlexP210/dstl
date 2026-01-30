@@ -26,12 +26,13 @@ class DSTL(torch.nn.Module):
 			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
 			{'params': self.model._dynamics.parameters()},
 			{'params': self.model._reward.parameters() if self.cfg.train_reward else []},
-			{'params': self.model._termination.parameters() if self.cfg.episodic else [] , 'lr': self.cfg.lr / self.cfg.num_r_d},
-			{'params': self.model._Qs.parameters() , 'lr': self.cfg.lr / self.cfg.num_r_d},
+			{'params': self.model._termination.parameters() if self.cfg.episodic and self.cfg.train_rl else [] , 'lr': self.cfg.lr / self.cfg.num_r_d},
+			{'params': self.model._Qs.parameters() if self.cfg.train_rl else [], 'lr': self.cfg.lr / self.cfg.num_r_d},
 			{'params': []
 			 }
 		], lr=self.cfg.lr, capturable=True)
-		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=True)
+		if self.cfg.train_rl:
+			self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=True)
 		self.model.eval()
 		self.scale = RunningScale(cfg)
 		self.cfg.iterations += 2*int(cfg.action_dim >= 20) # Heuristic for large action spaces
@@ -153,6 +154,8 @@ class DSTL(torch.nn.Module):
 		obs = obs.to(self.device, non_blocking=True).unsqueeze(0)
 		if self.cfg.mpc:
 			return self.plan(obs, t0=t0, eval_mode=eval_mode)
+		if not self.cfg.train_rl:
+			raise NotImplementedError("cfg.train_rl and cfg.mpc both set to `False`.")
 		z = self.model.encode(obs)
 		action, info = self.model.pi(z)
 		if eval_mode:
@@ -197,7 +200,7 @@ class DSTL(torch.nn.Module):
 			discount = discount * self.discount
 
 			# Termination update
-			if self.cfg.episodic:
+			if self.cfg.episodic and self.cfg.train_rl:
 				termination = torch.clip(termination + (self.model.termination(z) > 0.5).float(), max=1.)
 
 			# Sum all quantities over time [N,1]
@@ -205,8 +208,11 @@ class DSTL(torch.nn.Module):
 			epi_dyn += dyn_epi_uncer
 
 		# Bootstrap value from final state
-		action, _ = self.model.pi(z)
-		value = G + discount * (1 - termination) * self.model.Q(z, action, return_type='avg')
+		if self.cfg.train_rl:
+			action, _ = self.model.pi(z)
+			value = G + discount * (1 - termination) * self.model.Q(z, action, return_type='avg')
+		else:
+			value = G
 		# Info for logging
 		info = {
 			"total_return" : G,
@@ -233,6 +239,8 @@ class DSTL(torch.nn.Module):
 
 		# Sample policy trajectories [24]
 		if self.cfg.num_pi_trajs > 0:
+			if not self.cfg.train_rl:
+				raise NotImplementedError("cfg.num_pi_trajs > 0 but cfg.train_rl = False")
 			pi_actions = torch.empty(self.cfg.horizon, self.cfg.num_pi_trajs, self.cfg.action_dim, device=self.device)
 			# Repeated State [self.cfg.num_pi_trajs, D]
 			_z = z.repeat(self.cfg.num_pi_trajs, 1)
@@ -386,7 +394,9 @@ class DSTL(torch.nn.Module):
 					reward =  (1-dyn_beta) * extrinsic_reward + dyn_beta*dyn_epi
 				else:
 					reward =  dyn_beta*dyn_epi
-				td_targets = self._td_target(next_z_true, reward, terminated) #[T,B,1] target expected return starting from current state
+
+				if self.cfg.train_rl:
+					td_targets = self._td_target(next_z_true, reward, terminated) #[T,B,1] target expected return starting from current state
 
 			# Prepare for update
 			self.model.train()
@@ -408,13 +418,16 @@ class DSTL(torch.nn.Module):
 			consistency_loss = consistency_loss / self.cfg.horizon
 
 			# Compute Value losses
-			value_loss = 0
-			_zs = zs[:-1] #[T,B , D]
-			qs = self.model.Q(_zs, action, return_type='all')
-			for t, (td_targets_unbind, qs_unbind) in enumerate(zip(td_targets.unbind(0), qs.unbind(1))):
-				for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
-					value_loss = value_loss + math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg).mean() * self.cfg.rho**t
-			value_loss = value_loss / (self.cfg.horizon * self.cfg.num_q)
+			if self.cfg.train_rl:
+				value_loss = 0
+				_zs = zs[:-1] #[T,B , D]
+				qs = self.model.Q(_zs, action, return_type='all')
+				for t, (td_targets_unbind, qs_unbind) in enumerate(zip(td_targets.unbind(0), qs.unbind(1))):
+					for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
+						value_loss = value_loss + math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg).mean() * self.cfg.rho**t
+				value_loss = value_loss / (self.cfg.horizon * self.cfg.num_q)
+			else:
+				value_loss = 0.
 
 			# Compute Reward losses (if needed)
 			if self.cfg.train_reward:
@@ -427,7 +440,7 @@ class DSTL(torch.nn.Module):
 				reward_loss = 0.
 
 			# Compute the termination lossess (if needed)
-			if self.cfg.episodic:
+			if self.cfg.episodic and self.cfg.train_rl:
 				termination_pred = self.model.termination(zs[1:], unnormalized=True)
 				termination_loss = F.binary_cross_entropy_with_logits(termination_pred, terminated)
 			else:
@@ -446,11 +459,11 @@ class DSTL(torch.nn.Module):
 			self.optim.step()
 			self.optim.zero_grad(set_to_none=True)
 
-			# Update policy
-			pi_info = self.update_pi(zs.detach())
+			# Update policy & target Q functions
+			if self.cfg.train_rl:
+				pi_info = self.update_pi(zs.detach())
+				self.model.soft_update_target_Q()
 
-			# Update target Q-functions
-			self.model.soft_update_target_Q()
 			consistency_loss_all =consistency_loss_all + consistency_loss 
 			reward_loss_all = reward_loss_all + reward_loss 
 			value_loss_all = value_loss_all + value_loss
@@ -470,9 +483,10 @@ class DSTL(torch.nn.Module):
 		})
 		if self.cfg.train_reward:
 			info.update(TensorDict({"reward_loss": reward_loss_all / self.cfg.num_r_d}))
-		if self.cfg.episodic:
+		if self.cfg.episodic and self.cfg.train_rl:
 			info.update(math.termination_statistics(torch.sigmoid(termination_pred[-1]), terminated[-1]))
-		info.update(pi_info)
+		if self.cfg.train_rl:
+			info.update(pi_info)
 		return info.detach().mean()
 
 	def update(self, buffer):

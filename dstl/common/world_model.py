@@ -18,20 +18,30 @@ class WorldModel(nn.Module):
         self.cfg = cfg
         self._encoder = layers.enc(cfg)
         self._dynamics = EnsembleStochasticLinearUnitVariance(cfg.latent_dim + cfg.action_dim + cfg.task_dim, cfg.mlp_dim, cfg.latent_dim, ensemble_size=cfg.num_r_d) 
+        
         if cfg.train_reward:
             self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
             init.zero_([self._reward[-1].weight,])
         else:
             self._reward = None
-        self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
-        self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
-        self._Qs = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1), dropout=cfg.dropout) for _ in range(cfg.num_q)])
+                
+        if self.cfg.train_rl:
+            self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
+            self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
+            self._Qs = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1), dropout=cfg.dropout) for _ in range(cfg.num_q)])
+            init.zero_([self._Qs.params["2", "weight"]])
+        else:
+            self._pi = None
+            self._Qs = None
+            self._termination = None
+            
         self.apply(init.weight_init)
-        init.zero_([self._Qs.params["2", "weight"]])
 
         self.register_buffer("log_std_min", torch.tensor(cfg.log_std_min))
         self.register_buffer("log_std_dif", torch.tensor(cfg.log_std_max) - self.log_std_min)
-        self.init()
+
+        if self.cfg.train_rl:
+            self.init()
 
     def init(self):
         # Create params
@@ -66,7 +76,8 @@ class WorldModel(nn.Module):
 
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
-        self.init()
+        if self.cfg.train_rl:
+            self.init()
         return self
 
     def train(self, mode=True):
@@ -74,7 +85,8 @@ class WorldModel(nn.Module):
         Overriding `train` method to keep target Q-networks in eval mode.
         """
         super().train(mode)
-        self._target_Qs.train(False)
+        if self.cfg.train_rl:
+            self._target_Qs.train(False)
         return self
 
     def soft_update_target_Q(self):
@@ -123,7 +135,7 @@ class WorldModel(nn.Module):
             z = torch.cat([z, a], dim=-1)
             return self._reward(z)
         else:
-            raise "WorldModel.reward() called but cfg.train_reward set to false."
+            raise NotImplementedError("WorldModel.reward() called but cfg.train_reward set to false.")
         
     def termination(self, z, unnormalized=False):
         """
