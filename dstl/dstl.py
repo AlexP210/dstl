@@ -378,25 +378,33 @@ class DSTL(torch.nn.Module):
 		"""
 		consistency_loss_all, reward_loss_all, value_loss_all, termination_loss_all, total_loss_all, grad_norm_all = 0,0,0,0,0,0
 		epistemic_uncertainty = 0
-		for member in range(self.cfg.num_r_d):
-			#Compute Targets using the predicted rewards and true next states (encoded) to be passed to the Q model. 
-			# True input used : rewards, terminated status, next observed stated. 
-			# World Model prediction is used in encoded next states, Q value estimate given the encoded next states and predicted action from policy
-			with torch.no_grad():
-				next_z_true = self.model.encode(obs[1:]) # [T,B, D] the latent dimension of the next states of the current observation in the selected sequence [observation at T=2,3,4] ie target next states for the current state
-				z = self.model.encode(obs[:-1])
-				dyn_beta = self.cfg.dyn_uncer_beta_coef
-				_, dyn_epi = self.model.next(z, action, return_epistemic=True)
-				epistemic_uncertainty += dyn_epi.mean()
-				# Reward to use for the TD target is the extrinsic reward (if training the reward model)
-				# plus the intrinsic reward, balanced by dyn_beta
-				if self.cfg.train_reward:
-					reward =  (1-dyn_beta) * extrinsic_reward + dyn_beta*dyn_epi
-				else:
-					reward =  dyn_beta*dyn_epi
 
-				if self.cfg.train_rl:
-					td_targets = self._td_target(next_z_true, reward, terminated) #[T,B,1] target expected return starting from current state
+		# Compute the various quantities we need
+		with torch.no_grad():
+			# Next latents, present latents
+			next_z_true = self.model.encode(obs[1:]) # [T,B, D] the latent dimension of the next states of the current observation in the selected sequence [observation at T=2,3,4] ie target next states for the current state
+			z = self.model.encode(obs[:-1])
+
+			# Intrinsic rewards
+			intrinsic_reward = torch.empty_like(extrinsic_reward)
+			for (t, (_z, _a)) in enumerate(zip(z.unbind(0), action.unbind(0))):
+				_, dyn_epi = self.model.next(_z, _a, return_epistemic=True)
+				intrinsic_reward[t] = dyn_epi
+			epistemic_uncertainty = intrinsic_reward.mean()
+
+			# Total reward
+			dyn_beta = self.cfg.dyn_uncer_beta_coef
+			if self.cfg.train_reward:
+				reward =  (1-dyn_beta) * extrinsic_reward + dyn_beta*intrinsic_reward
+			else:
+				reward =  dyn_beta*intrinsic_reward
+
+			# TD targets (if needed)
+			if self.cfg.train_rl:
+				td_targets = self._td_target(next_z_true, reward, terminated) #[T,B,1] target expected return starting from current state
+
+
+		for member in range(self.cfg.num_r_d):
 
 			# Prepare for update
 			self.model.train()
@@ -433,7 +441,7 @@ class DSTL(torch.nn.Module):
 			if self.cfg.train_reward:
 				reward_loss = 0
 				reward_preds = self.model.reward(_zs, action)
-				for t, (rew_pred_unbind, rew_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0))):
+				for t, (rew_pred_unbind, rew_unbind) in enumerate(zip(reward_preds.unbind(0), extrinsic_reward.unbind(0))):
 					reward_loss = reward_loss + math.soft_ce(rew_pred_unbind, rew_unbind, self.cfg).mean() * self.cfg.rho**t
 				reward_loss = reward_loss / self.cfg.horizon
 			else:
@@ -479,7 +487,7 @@ class DSTL(torch.nn.Module):
 			"termination_loss": termination_loss_all / self.cfg.num_r_d,
 			"total_loss": total_loss_all / self.cfg.num_r_d,
 			"grad_norm": grad_norm_all / self.cfg.num_r_d,
-			"epistemic_uncertainty": epistemic_uncertainty / self.cfg.num_r_d 
+			"epistemic_uncertainty": epistemic_uncertainty 
 		})
 		if self.cfg.train_reward:
 			info.update(TensorDict({"reward_loss": reward_loss_all / self.cfg.num_r_d}))

@@ -220,8 +220,7 @@ class OnlineTrainer(Trainer):
                 
                 # If we're saving the training data, then store the first half of the transition (z,a) for each env
                 if self.logger.save_training_data:
-                    z = self.agent.model.encode(last_obs.to(self.cfg.device, non_blocking=True).unsqueeze(0))
-                    transitions[env_id] = [z, a]
+                    transitions[env_id] = [last_obs, a]
 
             # Step the envs with the actions
             obs, reward, terminated, truncated, info = self.env.step(actions)
@@ -238,9 +237,8 @@ class OnlineTrainer(Trainer):
 
                 # If we're saving training data, then log the transition
                 if self.logger.save_training_data:
-                    z, a = transitions[env_id]
-                    z_prime = self.agent.model.encode(obs[env_id].to(self.cfg.device, non_blocking=True).unsqueeze(0))
-                    self.logger.log_transition(z, a, reward[env_id], z_prime, terminated[env_id], truncated[env_id])
+                    o, a = transitions[env_id]
+                    self.logger.log_transition(o, a, reward[env_id], obs[env_id], terminated[env_id], truncated[env_id])
 
             # Update agent if we've collected enough for pretraining 
             # and have at least one episode in the buffer

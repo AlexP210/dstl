@@ -123,10 +123,19 @@ class Logger:
 		self.save_training_data = cfg.save_training_data
 		self._training_dataset = None
 		if self.save_training_data:
+			obs_dim = self.cfg.obs_shape[self.cfg.obs]
 			save_dir = os.path.join(self._log_dir, "data")
 			make_dir(save_dir)
 			save_path = os.path.join(save_dir, "training.h5")
 			self._training_dataset = self.create_transition_dataset(path=save_path)
+			self._transition_buffer_size = 1024
+			self._data_save_index = 0
+			self.o_buffer = np.empty(shape=(self._transition_buffer_size, *obs_dim), dtype=float)
+			self.a_buffer = np.empty(shape=(self._transition_buffer_size, cfg.action_dim), dtype=float)
+			self.r_buffer = np.empty(shape=(self._transition_buffer_size, 1), dtype=float)
+			self.oprime_buffer = np.empty(shape=(self._transition_buffer_size, *obs_dim), dtype=float)
+			self.termination_buffer = np.empty(shape=(self._transition_buffer_size, 1), dtype=bool)
+			self.truncation_buffer = np.empty(shape=(self._transition_buffer_size, 1), dtype=bool)
 		
 		if not cfg.enable_wandb or self.project == "none" or self.entity == "none":
 			print(colored("Wandb disabled.", "blue", attrs=["bold"]))
@@ -177,18 +186,19 @@ class Logger:
 				self._wandb.log_artifact(artifact)
 
 	def finish(self, agent=None):
+		if self.save_training_data:
+			self.flush_transition_data()
+			final_size = self._transitions_collected
+			for key in self._training_dataset:
+				ds = self._training_dataset[key]
+				ds.resize((final_size, *ds.shape[1:]))
+			self._training_dataset.close()
 		try:
 			self.save_agent(agent)
 		except Exception as e:
 			print(colored(f"Failed to save model: {e}", "red"))
 		if self._wandb:
 			self._wandb.finish()
-		if self.save_training_data:
-			final_size = self._transitions_collected
-			for key in self._training_dataset:
-				ds = self._training_dataset[key]
-				ds.resize((final_size, *ds.shape[1:]))
-			self._training_dataset.close()
 
 	def _format(self, key, value, ty):
 		if ty == "int":
@@ -260,11 +270,12 @@ class Logger:
 
 	def create_transition_dataset(self, path):
 		dataset = h5py.File(path, "w")
-		z_dataset = dataset.create_dataset(
-			name="z", 
-			shape=(self.cfg.steps, self.cfg.latent_dim),
-			maxshape=(None, self.cfg.latent_dim),
-			chunks=(1024, self.cfg.latent_dim),
+		obs_dim = self.cfg.obs_shape[self.cfg.obs]
+		o_dataset = dataset.create_dataset(
+			name="o", 
+			shape=(self.cfg.steps, *obs_dim),
+			maxshape=(None, *obs_dim),
+			chunks=(1024, *obs_dim),
 			dtype="float32"
 		)
 		a_dataset = dataset.create_dataset(
@@ -281,11 +292,11 @@ class Logger:
 			chunks=(1024, 1),
 			dtype="float32"
 		)
-		zprime_dataset = dataset.create_dataset(
-			name="z'", 
-			shape=(self.cfg.steps, self.cfg.latent_dim),
-			maxshape=(None, self.cfg.latent_dim),
-			chunks=(1024, self.cfg.latent_dim),
+		oprime_dataset = dataset.create_dataset(
+			name="oprime", 
+			shape=(self.cfg.steps, *obs_dim),
+			maxshape=(None, *obs_dim),
+			chunks=(1024, *obs_dim),
 			dtype="float32"
 		)
 		terminated_dataset = dataset.create_dataset(
@@ -303,26 +314,42 @@ class Logger:
 			dtype="bool"
 		)
 		self._transitions_collected = 0
+		self._transitions_buffered = 0
 		return dataset
 
 	def _ensure_capacity_for_transition_data(self):
-		if self._transitions_collected < self._training_dataset["z"].shape[0]:
+		if self._transitions_collected + self._transitions_buffered < self._training_dataset["o"].shape[0]:
 			return
 
 		# grow geometrically
-		old_size = self._training_dataset["z"].shape[0]
+		old_size = self._training_dataset["o"].shape[0]
 		new_size = int(old_size * 1.5)
 
 		for key in self._training_dataset:
 			ds = self._training_dataset[key]
 			ds.resize((new_size, *ds.shape[1:]))
 
-	def log_transition(self, z, a, r, z_prime, terminated, truncated):
+	def flush_transition_data(self):
+		start = self._transitions_collected
+		end = start + self._transitions_buffered
 		self._ensure_capacity_for_transition_data()
-		self._training_dataset["z"][self._transitions_collected] = z.detach().cpu().numpy()
-		self._training_dataset["a"][self._transitions_collected] = a.detach().cpu().numpy()
-		self._training_dataset["r"][self._transitions_collected] = r.detach().cpu().numpy()
-		self._training_dataset["z'"][self._transitions_collected] = z_prime.detach().cpu().numpy()
-		self._training_dataset["terminated"][self._transitions_collected] = terminated.detach().cpu().numpy()
-		self._training_dataset["truncated"][self._transitions_collected] = truncated.detach().cpu().numpy()
-		self._transitions_collected += 1
+		self._training_dataset["o"][start:end] = self.o_buffer[:self._transitions_buffered]
+		self._training_dataset["a"][start:end] = self.a_buffer[:self._transitions_buffered]
+		self._training_dataset["r"][start:end] = self.r_buffer[:self._transitions_buffered]
+		self._training_dataset["oprime"][start:end] = self.oprime_buffer[:self._transitions_buffered]
+		self._training_dataset["terminated"][start:end] = self.termination_buffer[:self._transitions_buffered]
+		self._training_dataset["truncated"][start:end] = self.truncation_buffer[:self._transitions_buffered]
+		self._transitions_collected += self._transitions_buffered
+		self._transitions_buffered = 0
+
+	def log_transition(self, o, a, r, o_prime, terminated, truncated):
+		self.o_buffer[self._transitions_buffered] = o.detach().cpu().numpy()
+		self.a_buffer[self._transitions_buffered] = a.detach().cpu().numpy()
+		self.r_buffer[self._transitions_buffered] = r.detach().cpu().numpy()
+		self.oprime_buffer[self._transitions_buffered] = o_prime.detach().cpu().numpy()
+		self.termination_buffer[self._transitions_buffered] = terminated.detach().cpu().numpy()
+		self.truncation_buffer[self._transitions_buffered] = truncated.detach().cpu().numpy()
+		self._transitions_buffered += 1
+
+		if self._transitions_buffered == self._transition_buffer_size:
+			self.flush_transition_data()
