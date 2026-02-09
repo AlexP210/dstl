@@ -122,7 +122,7 @@ class Logger:
 
 		self.save_training_data = cfg.save_training_data
 		self._training_dataset = None
-		if self.save_training_data:
+		if self.save_training_data > 0:
 			obs_dim = self.cfg.obs_shape[self.cfg.obs]
 			save_dir = os.path.join(self._log_dir, "data")
 			make_dir(save_dir)
@@ -177,16 +177,16 @@ class Logger:
 		if self._save_agent and agent:
 			fp = os.path.join(self._model_dir, f'{str(identifier)}.pt')
 			agent.save(fp)
-			if self._wandb:
-				artifact = self._wandb.Artifact(
-					self._group + '-' + str(self._seed) + '-' + str(identifier),
-					type='model',
-				)
-				artifact.add_file(fp)
-				self._wandb.log_artifact(artifact)
+			# if self._wandb:
+			# 	artifact = self._wandb.Artifact(
+			# 		self._group + '-' + str(self._seed) + '-' + str(identifier),
+			# 		type='model',
+			# 	)
+			# 	artifact.add_file(fp)
+			# 	self._wandb.log_artifact(artifact)
 
 	def finish(self, agent=None):
-		if self.save_training_data:
+		if self.save_training_data > 0:
 			self.flush_transition_data()
 			final_size = self._transitions_collected
 			for key in self._training_dataset:
@@ -343,13 +343,14 @@ class Logger:
 		self._transitions_buffered = 0
 
 	def log_transition(self, o, a, r, o_prime, terminated, truncated):
-		self.o_buffer[self._transitions_buffered] = o.detach().cpu().numpy()
-		self.a_buffer[self._transitions_buffered] = a.detach().cpu().numpy()
-		self.r_buffer[self._transitions_buffered] = r.detach().cpu().numpy()
-		self.oprime_buffer[self._transitions_buffered] = o_prime.detach().cpu().numpy()
-		self.termination_buffer[self._transitions_buffered] = terminated.detach().cpu().numpy()
-		self.truncation_buffer[self._transitions_buffered] = truncated.detach().cpu().numpy()
-		self._transitions_buffered += 1
+		if np.random.rand() <= self.save_training_data:
+			self.o_buffer[self._transitions_buffered] = o.detach().cpu().numpy()
+			self.a_buffer[self._transitions_buffered] = a.detach().cpu().numpy()
+			self.r_buffer[self._transitions_buffered] = r.detach().cpu().numpy()
+			self.oprime_buffer[self._transitions_buffered] = o_prime.detach().cpu().numpy()
+			self.termination_buffer[self._transitions_buffered] = terminated.detach().cpu().numpy()
+			self.truncation_buffer[self._transitions_buffered] = truncated.detach().cpu().numpy()
+			self._transitions_buffered += 1
 
-		if self._transitions_buffered == self._transition_buffer_size:
-			self.flush_transition_data()
+			if self._transitions_buffered == self._transition_buffer_size:
+				self.flush_transition_data()

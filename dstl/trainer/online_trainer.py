@@ -219,7 +219,7 @@ class OnlineTrainer(Trainer):
                 actions[env_id] = a
                 
                 # If we're saving the training data, then store the first half of the transition (z,a) for each env
-                if self.logger.save_training_data:
+                if self.logger.save_training_data > 0:
                     transitions[env_id] = [last_obs, a]
 
             # Step the envs with the actions
@@ -236,7 +236,7 @@ class OnlineTrainer(Trainer):
                 self._step += 1
 
                 # If we're saving training data, then log the transition
-                if self.logger.save_training_data:
+                if self.logger.save_training_data > 0:
                     o, a = transitions[env_id]
                     self.logger.log_transition(o, a, reward[env_id], obs[env_id], terminated[env_id], truncated[env_id])
 
