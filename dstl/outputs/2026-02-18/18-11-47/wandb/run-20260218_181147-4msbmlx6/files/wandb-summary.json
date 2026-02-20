@@ -1,0 +1,1 @@
+{"train/next_latent_ll":-71.15740966796875,"train/mean_kl":0.3609575033187866,"_timestamp":1.771456309124139e+09,"_step":0,"train/loss":72.37062072753906,"_wandb":{"runtime":12},"_runtime":12.990125929,"train/reward_ll":-0.8522534370422363}

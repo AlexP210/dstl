@@ -32,8 +32,8 @@ class TensorWrapper(gym.Wrapper):
         return obs
 
     def reset(self, task_idx=None, env_id=None):
-        obs = self.env.reset(env_id)
-        return self._obs_to_tensor(obs)
+        obs, info = self.env.reset(env_id)
+        return self._obs_to_tensor(obs), info
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action.numpy())

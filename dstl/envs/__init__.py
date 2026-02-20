@@ -81,6 +81,7 @@ def make_env(cfg, env_cfg=None):
             # If env observation space is a Box, return a dict with just {`obs_type`:`shape`}
             elif type(env.observation_space) == type(gym.spaces.Box(low=0, high=1)):
                 cfg.obs_shape = {obs_format: env.observation_space.shape}
+            cfg.state_dim = env_cfg.state_space
             cfg.action_dim = env.action_space.shape[1]
             cfg.episode_length = env.unwrapped.max_episode_length
             cfg.seed_steps = max(1000, 5 * cfg.episode_length)

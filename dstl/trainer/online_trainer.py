@@ -34,7 +34,7 @@ class OnlineTrainer(Trainer):
 
         # Run all environments `self.cfg_eval_episodes` times
         for i in range(self.cfg.eval_episodes):
-            parallel_obs, parallel_done, parallel_ep_reward, t = (
+            (parallel_obs, parallel_info), parallel_done, parallel_ep_reward, t = (
                 self.env.reset(),
                 torch.full(size=(self.cfg.num_envs,1),fill_value=False),
                 torch.full(size=(self.cfg.num_envs,1),fill_value=0.0),
@@ -90,20 +90,23 @@ class OnlineTrainer(Trainer):
             episode_length=np.nanmean(ep_lengths),
         )
 
-    def to_td(self, obs, action=None, reward=None, terminated=None):
+    def to_td(self, obs, state=None, action=None, reward=None, terminated=None):
         """Creates a TensorDict for a new episode."""
         if isinstance(obs, dict):
             obs = TensorDict(obs, batch_size=(), device="cpu")
         else:
-            obs = obs.unsqueeze(0).cpu()
+            obs = obs.unsqueeze(0).cpu()            
         if action is None:
             action = torch.full_like(self.env.rand_act()[0], float("nan"))
         if reward is None:
             reward = torch.tensor(float("nan"))
         if terminated is None:
             terminated = torch.tensor(float("nan"))
+        if state is None:
+            terminated = torch.tensor(float("nan"))
         td = TensorDict(
             obs=obs,
+            state=state.unsqueeze(0),
             action=action.unsqueeze(0),
             reward=reward.unsqueeze(0),
             terminated=terminated.unsqueeze(0),
@@ -194,10 +197,12 @@ class OnlineTrainer(Trainer):
                     self.logger.log(train_metrics, "train")
 
                 # Reset the environments
-                obs = self.env.reset()
+                obs, info = self.env.reset()
+                state = info["state"]
                 for env_id in range(self.cfg.num_envs):
                     first_obs = obs[env_id]
-                    self._tds_for_each_env[env_id].append(self.to_td(first_obs))
+                    first_state = state[env_id]
+                    self._tds_for_each_env[env_id].append(self.to_td(first_obs, first_state))
 
             # Which environments are still running
             not_done_envs = torch.nonzero(~done, as_tuple=True)[0].tolist()
@@ -209,6 +214,7 @@ class OnlineTrainer(Trainer):
             actions = torch.zeros(size=(self.cfg.num_envs, self.cfg.action_dim))
             for env_id in not_done_envs:
                 last_obs = self._tds_for_each_env[env_id][-1]["obs"][0]
+                last_state = self._tds_for_each_env[env_id][-1]["state"][0]
                 # Choose a random or planned action depending on whether we're still collecting seed data
                 if self._pretraining_done:
                     a, _ = self.agent.act(
@@ -220,25 +226,26 @@ class OnlineTrainer(Trainer):
                 
                 # If we're saving the training data, then store the first half of the transition (z,a) for each env
                 if self.logger.save_training_data > 0:
-                    transitions[env_id] = [last_obs, a]
+                    transitions[env_id] = [last_obs, a, last_state]
 
             # Step the envs with the actions
             obs, reward, terminated, truncated, info = self.env.step(actions)
+            state = info["state"]
             done = terminated | truncated
 
             # Turn the transition to a tensordict and add to the transition list
             for env_id in not_done_envs:
                 self._tds_for_each_env[env_id].append(
                     self.to_td(
-                        obs[env_id], actions[env_id], reward[env_id], terminated[env_id]
+                        obs[env_id], state[env_id], actions[env_id], reward[env_id], terminated[env_id]
                     )
                 )
                 self._step += 1
 
                 # If we're saving training data, then log the transition
                 if self.logger.save_training_data > 0:
-                    o, a = transitions[env_id]
-                    self.logger.log_transition(o, a, reward[env_id], obs[env_id], terminated[env_id], truncated[env_id])
+                    o, a, s = transitions[env_id]
+                    self.logger.log_transition(o, a, reward[env_id], obs[env_id], terminated[env_id], truncated[env_id], s, state[env_id])
 
             # Update agent if we've collected enough for pretraining 
             # and have at least one episode in the buffer

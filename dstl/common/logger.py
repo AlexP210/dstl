@@ -136,7 +136,9 @@ class Logger:
 			self.oprime_buffer = np.empty(shape=(self._transition_buffer_size, *obs_dim), dtype=float)
 			self.termination_buffer = np.empty(shape=(self._transition_buffer_size, 1), dtype=bool)
 			self.truncation_buffer = np.empty(shape=(self._transition_buffer_size, 1), dtype=bool)
-		
+			self.state_buffer = np.empty(shape=(self._transition_buffer_size, self.cfg.state_dim), dtype=float)
+			self.state_prime_buffer = np.empty(shape=(self._transition_buffer_size, self.cfg.state_dim), dtype=float)
+
 		if not cfg.enable_wandb or self.project == "none" or self.entity == "none":
 			print(colored("Wandb disabled.", "blue", attrs=["bold"]))
 			cfg.save_agent = False
@@ -276,43 +278,74 @@ class Logger:
 			shape=(self.cfg.steps, *obs_dim),
 			maxshape=(None, *obs_dim),
 			chunks=(1024, *obs_dim),
-			dtype="float32"
+			dtype="float32",
+			compression="gzip",
+			compression_opts=4,
 		)
 		a_dataset = dataset.create_dataset(
 			name="a", 
 			shape=(self.cfg.steps, self.cfg.action_dim),
 			maxshape=(None, self.cfg.action_dim),
 			chunks=(1024, self.cfg.action_dim),
-			dtype="float32"
+			dtype="float32",
+			compression="gzip",
+			compression_opts=4,
 		)
 		r_dataset = dataset.create_dataset(
 			name="r", 
 			shape=(self.cfg.steps, 1),
 			maxshape=(None, 1),
 			chunks=(1024, 1),
-			dtype="float32"
+			dtype="float32",
+			compression="gzip",
+			compression_opts=4,
 		)
 		oprime_dataset = dataset.create_dataset(
 			name="oprime", 
 			shape=(self.cfg.steps, *obs_dim),
 			maxshape=(None, *obs_dim),
 			chunks=(1024, *obs_dim),
-			dtype="float32"
+			dtype="float32",
+			compression="gzip",
+			compression_opts=4,
 		)
 		terminated_dataset = dataset.create_dataset(
 			name="terminated", 
 			shape=(self.cfg.steps, 1),
 			maxshape=(None, 1),
 			chunks=(1024, 1),
-			dtype="bool"
+			dtype="bool",
+			compression="gzip",
+			compression_opts=4,
 		)
 		truncated_dataset = dataset.create_dataset(
 			name="truncated", 
 			shape=(self.cfg.steps, 1),
 			maxshape=(None, 1),
 			chunks=(1024, 1),
-			dtype="bool"
+			dtype="bool",
+			compression="gzip",
+			compression_opts=4,
 		)
+		state_dataset = dataset.create_dataset(
+			name="state", 
+			shape=(self.cfg.steps, self.cfg.state_dim),
+			maxshape=(None, self.cfg.state_dim),
+			chunks=(1024, self.cfg.state_dim),
+			dtype="float32",
+			compression="gzip",
+			compression_opts=4,
+		)
+		state_prime_dataset = dataset.create_dataset(
+			name="state_prime", 
+			shape=(self.cfg.steps, self.cfg.state_dim),
+			maxshape=(None, self.cfg.state_dim),
+			chunks=(1024, self.cfg.state_dim),
+			dtype="float32",
+			compression="gzip",
+			compression_opts=4,
+		)
+
 		self._transitions_collected = 0
 		self._transitions_buffered = 0
 		return dataset
@@ -339,10 +372,12 @@ class Logger:
 		self._training_dataset["oprime"][start:end] = self.oprime_buffer[:self._transitions_buffered]
 		self._training_dataset["terminated"][start:end] = self.termination_buffer[:self._transitions_buffered]
 		self._training_dataset["truncated"][start:end] = self.truncation_buffer[:self._transitions_buffered]
+		self._training_dataset["state"][start:end] = self.state_buffer[:self._transitions_buffered]
+		self._training_dataset["state_prime"][start:end] = self.state_prime_buffer[:self._transitions_buffered]
 		self._transitions_collected += self._transitions_buffered
 		self._transitions_buffered = 0
 
-	def log_transition(self, o, a, r, o_prime, terminated, truncated):
+	def log_transition(self, o, a, r, o_prime, terminated, truncated, s, s_prime):
 		if np.random.rand() <= self.save_training_data:
 			self.o_buffer[self._transitions_buffered] = o.detach().cpu().numpy()
 			self.a_buffer[self._transitions_buffered] = a.detach().cpu().numpy()
@@ -350,6 +385,8 @@ class Logger:
 			self.oprime_buffer[self._transitions_buffered] = o_prime.detach().cpu().numpy()
 			self.termination_buffer[self._transitions_buffered] = terminated.detach().cpu().numpy()
 			self.truncation_buffer[self._transitions_buffered] = truncated.detach().cpu().numpy()
+			self.state_buffer[self._transitions_buffered] = s.detach().cpu().numpy()
+			self.state_prime_buffer[self._transitions_buffered] = s_prime.detach().cpu().numpy()
 			self._transitions_buffered += 1
 
 			if self._transitions_buffered == self._transition_buffer_size:

@@ -17,7 +17,7 @@ class WorldModel(nn.Module):
         super().__init__()
         self.cfg = cfg
         self._encoder = layers.enc(cfg)
-        self._dynamics = EnsembleStochasticLinearUnitVariance(cfg.latent_dim + cfg.action_dim + cfg.task_dim, cfg.mlp_dim, cfg.latent_dim, ensemble_size=cfg.num_r_d) 
+        self._dynamics = EnsembleStochasticLinearUnitVariance(cfg.latent_dim + cfg.action_dim + cfg.task_dim, cfg.latent_dim, cfg.mlp_dim, ensemble_size=cfg.num_r_d) 
         
         if cfg.train_reward:
             self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))

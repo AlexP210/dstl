@@ -95,8 +95,9 @@ class Buffer():
 		Prepare a sampled batch for training (post-processing).
 		Expects `td` to be a TensorDict with batch size TxB.
 		"""
-		td = td.select("obs", "action", "reward", "terminated", strict=False).to(self._device, non_blocking=True)
+		td = td.select("obs", "state", "action", "reward", "terminated", strict=False).to(self._device, non_blocking=True)
 		obs = td.get('obs').contiguous()
+		state = td.get('state').contiguous()
 		action = td.get('action')[1:].contiguous()
 		reward = td.get('reward')[1:].unsqueeze(-1).contiguous()
 		terminated = td.get('terminated', None)
@@ -104,7 +105,7 @@ class Buffer():
 			terminated = td.get('terminated')[1:].unsqueeze(-1).contiguous()
 		else:
 			terminated = torch.zeros_like(reward)
-		return obs, action, reward, terminated
+		return obs, state, action, reward, terminated
 
 	def sample(self):
 		"""Sample a batch of subsequences from the buffer."""

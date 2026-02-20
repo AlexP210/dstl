@@ -1,0 +1,16 @@
+logdir: /data/AlexPleava/outputs/dstl_pretrain_rl/BoxPlace-Direct-v0/1/2026-02-10_00-51-50/
+device: cuda:0
+teacher_latent_dim: 512
+student_latent_dim: 50
+action_dim: 7
+epochs: 10
+encoder_hidden_dim: 100
+encoder_shared_hidden_layers: 3
+dynamics_hidden_dim: 100
+dynamics_shared_hidden_layers: 3
+reward_hidden_dim: 100
+reward_shared_hidden_layers: 3
+learning_rate: 0.001
+batch_size: 128
+beta: 1
+validation_interval: 0.1

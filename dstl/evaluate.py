@@ -12,7 +12,7 @@ from termcolor import colored
 from dstl.common.parser import parse_cfg
 from dstl.common.seed import set_seed
 from dstl.envs import make_env
-from dstl import DSTL
+from dstl.agent import DSTL
 
 torch.backends.cudnn.benchmark = True
 

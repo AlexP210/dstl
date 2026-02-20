@@ -14,7 +14,7 @@ class IsaacLabWrapper(gym.Wrapper):
 
     def reset(self, env_id=None):
         if env_id is None:
-            obs, _ = self.env.reset()
+            obs, info = self.env.reset()
         else:
             self.env.unwrapped._reset_idx(
                 env_ids=torch.tensor(
@@ -26,7 +26,7 @@ class IsaacLabWrapper(gym.Wrapper):
             obs = self.env.unwrapped._get_observations()
         if type(obs) == type(dict()):
             obs = obs[self.cfg.obs]
-        return self.obs_to_cpu(obs)
+        return self.obs_to_cpu(obs), self.info_to_cpu(info)
 
     def step(self, action):
         action = torch.from_numpy(action)
@@ -97,8 +97,8 @@ class Pixels(gym.Wrapper):
         return past_n_frames
 
     def reset(self, env_id=None):
-        obs = self.env.reset(env_id=env_id)
-        return self._get_visual_obs(obs, is_reset=True)
+        obs, info = self.env.reset(env_id=env_id)
+        return self._get_visual_obs(obs, is_reset=True), info
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)

@@ -317,7 +317,7 @@ def mlp(in_dim, mlp_dims, out_dim, hidden_act=None , act=None, dropout=0. , Norm
     return nn.Sequential(*mlp)
 
 
-def conv(in_shape, num_channels, act=None):
+def conv(in_shape, num_channels, latent_dim=512, act=None):
     """
     Basic convolutional encoder for TD-MPC2 with raw image observations.
     4 layers of convolution with ReLU activations, followed by a linear layer.
@@ -328,7 +328,9 @@ def conv(in_shape, num_channels, act=None):
         nn.Conv2d(in_shape[0], num_channels, 7, stride=2), nn.ReLU(inplace=False),
         nn.Conv2d(num_channels, num_channels, 5, stride=2), nn.ReLU(inplace=False),
         nn.Conv2d(num_channels, num_channels, 3, stride=2), nn.ReLU(inplace=False),
-        nn.Conv2d(num_channels, num_channels, 3, stride=1), nn.Flatten()]
+        nn.Conv2d(num_channels, num_channels, 3, stride=1), nn.Flatten(),
+        # nn.Linear(in_features=512, out_features=latent_dim)
+    ]
     if act:
         layers.append(act)
     return nn.Sequential(*layers)
@@ -342,7 +344,7 @@ def enc(cfg, out={}):
         if k == 'state':
             out[k] = mlp(cfg.obs_shape[k][0] + cfg.task_dim, max(cfg.num_enc_layers-1, 1)*[cfg.enc_dim], cfg.latent_dim, act=SimNorm(cfg))
         elif k == 'rgb':
-            out[k] = conv(cfg.obs_shape[k], cfg.num_channels, act=SimNorm(cfg))
+            out[k] = conv(cfg.obs_shape[k], cfg.num_channels, cfg.latent_dim, act=SimNorm(cfg))
         else:
             raise NotImplementedError(f"Encoder for observation type {k} not implemented.")
     return nn.ModuleDict(out)

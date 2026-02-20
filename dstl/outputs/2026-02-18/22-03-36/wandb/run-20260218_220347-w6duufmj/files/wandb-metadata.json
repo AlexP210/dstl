@@ -1,0 +1,45 @@
+{
+  "os": "Linux-6.8.0-90-generic-x86_64-with-glibc2.35",
+  "python": "CPython 3.11.14",
+  "startedAt": "2026-02-19T03:03:47.225510Z",
+  "program": "/home/AlexPleava/projects/distill-plan/dstl/dstl/train_reward_decoder.py",
+  "codePath": "dstl/train_reward_decoder.py",
+  "git": {
+    "remote": "git@github.com:AlexP210/dstl.git",
+    "commit": "b160eb9d4dee6116ad8840326a2fa7d9099cac49"
+  },
+  "root": "/home/AlexPleava/projects/distill-plan/dstl/dstl/outputs/2026-02-18/22-03-36",
+  "host": "newton",
+  "executable": "/home/AlexPleava/miniconda3/envs/distill-plan-dstl/bin/python",
+  "cpu_count": 24,
+  "cpu_count_logical": 48,
+  "gpu": "NVIDIA GeForce RTX 4090",
+  "gpu_count": 2,
+  "disk": {
+    "/": {
+      "total": "1967317549056",
+      "used": "1725761114112"
+    }
+  },
+  "memory": {
+    "total": "269724639232"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA GeForce RTX 4090",
+      "memoryTotal": "25757220864",
+      "cudaCores": 16384,
+      "architecture": "Ada",
+      "uuid": "GPU-c2628629-5885-787a-2c64-61e918a52cbe"
+    },
+    {
+      "name": "NVIDIA GeForce RTX 4090",
+      "memoryTotal": "25757220864",
+      "cudaCores": 16384,
+      "architecture": "Ada",
+      "uuid": "GPU-d73d4993-bf9f-c4d8-0168-c552bd1d36de"
+    }
+  ],
+  "cudaVersion": "12.4",
+  "writerId": "2jwuowqbun5uj32ep6t8lomk0l8zwq7m"
+}

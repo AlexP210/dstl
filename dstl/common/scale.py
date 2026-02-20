@@ -11,7 +11,7 @@ class RunningScale(torch.nn.Module):
 		self.value = Buffer(torch.ones(1, dtype=torch.float32, device=self.cfg.device))
 		self._percentiles = Buffer(torch.tensor([5, 95], dtype=torch.float32, device=self.cfg.device))
 
-	def state_dict(self):
+	def state_dict(self, destination=None, prefix='', keep_vars=False):
 		return dict(value=self.value, percentiles=self._percentiles)
 
 	def load_state_dict(self, state_dict):
