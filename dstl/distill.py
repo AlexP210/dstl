@@ -12,22 +12,16 @@ import wandb
 from transition_data import TransitionDataset
 from student import Student
 
-# Dataset class    
 @hydra.main(config_name='config', config_path='.')
 def main(cfg):
-    student, training_loss, validation_loss = train(cfg)
 
-def train(cfg):
-
-    logdir = Path(cfg.logdir)
-    if not logdir.exists():
-        raise FileNotFoundError(f"Log directory does not exist: {logdir}")
-    if not logdir.is_dir():
-        raise NotADirectoryError(f"Not a directory: {logdir}")
-    dataset_path = logdir / "data" / "training.h5"
-
+    # Prepare dataset
+    dataset_path = Path(cfg.transition_data)
+    # if not dataset_path.exists():
+    #     raise FileNotFoundError(f"Log directory does not exist: {dataset_path}")
+    # if not dataset_path.is_dir():
+    #     raise NotADirectoryError(f"Not a directory: {dataset_path}")
     transition_dataset = TransitionDataset(dataset_path, batch_size=cfg.batch_size)
-
     n = len(transition_dataset)
     batch_starts = torch.arange(0, n - cfg.batch_size + 1, cfg.batch_size)
     np.random.shuffle(batch_starts)
@@ -35,16 +29,14 @@ def train(cfg):
     train_batch_starts = batch_starts[:train_len]
     validation_len = int(len(batch_starts) * 0.15)
     validation_batch_starts = batch_starts[train_len:train_len+validation_len]
-
-    # train_dataset, validation_dataset, test_dataset = random_split(transition_dataset, [train_len, validation_len, test_len])
     train_batch_start_sampler = RandomSampler(data_source=train_batch_starts)
     validation_batch_start_sampler = RandomSampler(data_source=validation_batch_starts)
     train_loader = DataLoader(dataset=transition_dataset, collate_fn=stack, sampler=train_batch_start_sampler, batch_size=1)
     validation_loader = DataLoader(dataset=transition_dataset, collate_fn=stack, sampler=validation_batch_start_sampler, batch_size=1)
 
-    # teacher_model_path = Path("/data/AlexPleava/outputs/dstl_task/BoxPlace-Direct-v0/1/2026-02-15_19-49-17/")
-    teacher_model_path = Path("/data/AlexPleava/outputs/dstl_pretrain_rl/BoxPlace-Direct-v0/1/2026-02-10_00-51-50/")
-    teacher_cfg = OmegaConf.load(teacher_model_path / "params" / "agent.yaml")
+    # Prepare the teacher
+    teacher_cfg_path = Path(cfg.teacher_config)
+    teacher_cfg = OmegaConf.load(teacher_cfg_path)
     teacher_cfg.obs_shape = {"rgb": (9, 64, 64)}
     teacher_cfg.action_dim = 7
     teacher_cfg.task_dim = 0
@@ -53,53 +45,59 @@ def train(cfg):
     teacher_cfg.num_envs = 1
     teacher_cfg.device = cfg.device
     teacher = DSTL(teacher_cfg)
-    teacher.load(teacher_model_path / "models" / "900864.pt")
+    teacher.load(cfg.teacher_model)
     teacher.to(device=cfg.device)
     for p in teacher.parameters():
         p.requires_grad = False
     teacher.eval()
 
+    # Prepare the student
     student = Student(teacher=teacher, cfg=cfg)
+    if cfg.student_encoder_checkpoint is not None:
+        state_dict = torch.load(cfg.student_encoder_checkpoint)
+        student.encoder.load_state_dict(state_dict)
+    if cfg.student_dynamics_checkpoint is not None:
+        state_dict = torch.load(cfg.student_dynamics_checkpoint)
+        student.dynamics.load_state_dict(state_dict)
+    if cfg.student_reward_checkpoint is not None:
+        state_dict = torch.load(cfg.student_reward_checkpoint)
+        student.reward.load_state_dict(state_dict)
 
-    optimizer = torch.optim.Adam(
+    # Prepare the optimizer
+    optimizer = torch.optim.AdamW(
         student.parameters(),
         lr=cfg.learning_rate,
-        betas=(0.9, 0.999),
-        eps=1e-8,
-        weight_decay=0.0
     )
 
+    # Initialize W&B
     wandb.init(
         project="Distilling-Planners",
         name=f"Distillation Test",  # optional unique run name
     )
 
+    # Train
+    iterations_since_last_eval = float("inf")
+    iterations = 0
+    for epoch in (epoch_bar:=tqdm(range(cfg.epochs), desc="Epochs", position=0)):
+        for train_batch in (iteration_bar:=tqdm(train_loader, desc="Iterations", position=1, leave=False)):
 
-    training_losses = []
-    validation_losses = []
-    epoch_bar = tqdm(range(cfg.epochs), desc="Epochs", position=0)
-    for epoch in epoch_bar:
-        iterations_since_last_eval = float("inf")
-        iteration_bar = tqdm(train_loader, desc="Iterations", position=1, leave=False)
-        for train_batch in iteration_bar:
-            global_step = epoch * len(train_loader) + iteration_bar.n
+            # Performing a training iteration
             optimizer.zero_grad()
             train_batch = train_batch.to(cfg.device)
             train_loss, mean_reward_ll, mean_next_student_latent_ll, mean_kl = student.compute_loss(batch=train_batch)
-            training_losses.append(train_loss)
             train_loss.backward()
             optimizer.step()
-            metrics = {
-                "loss": train_loss.item(),
-                "reward_ll": mean_reward_ll.item(),
-                "next_latent_ll": mean_next_student_latent_ll.item(),
-                "mean_kl": mean_kl.item(),
-            }
-            wandb.log(data={f"train/{key}":val for key, val in metrics.items()}, step=global_step)
-
+            wandb.log(data={
+                "train/loss": train_loss.item(),
+                "train/reward_ll": mean_reward_ll.item(),
+                "train/next_latent_ll": mean_next_student_latent_ll.item(),
+                "train/mean_kl": mean_kl.item(),
+            }, step=iterations)
             iteration_bar.set_postfix({
                 "train_loss":f"{train_loss.item():.2f}",
             })
+
+            # Evaluation if we need it
             if iterations_since_last_eval > cfg.validation_interval*len(train_loader):
                 student.eval()
                 total_validation_loss = 0
@@ -113,21 +111,22 @@ def train(cfg):
                     data = {
                         "validation/loss": total_validation_loss,
                     },
-                    step=global_step
+                    step=iterations
                 )
                 for name, param in student.named_parameters():
                     if param.grad is not None:
-                        wandb.log({f"grad/{name}": wandb.Histogram(param.grad.cpu())}, step=global_step)
-                        wandb.log({f"weights/{name}": wandb.Histogram(param.data.cpu())}, step=global_step)
+                        wandb.log({f"grad/{name}": wandb.Histogram(param.grad.cpu())}, step=iterations)
+                        wandb.log({f"weights/{name}": wandb.Histogram(param.data.cpu())}, step=iterations)
                 iteration_bar.set_postfix(val_loss=f"{total_validation_loss:.2f}")
                 iterations_since_last_eval = 0
-                validation_losses.append(validation_loss)
                 student.train()
+            iterations += 1
             iterations_since_last_eval += 1
-    wandb.finish()
-    torch.save(student.state_dict(), "student.pt")
-    return student, training_losses, validation_loss
-                
+        torch.save(student.encoder.state_dict(), Path(cfg.save_path) / f"student_encoder_{epoch}.pt")
+        torch.save(student.dynamics.state_dict(), Path(cfg.save_path) / f"student_dynamics_{epoch}.pt")
+        torch.save(student.reward.state_dict(), Path(cfg.save_path) / f"student_reward_{epoch}.pt")
+    OmegaConf.save(cfg, Path(cfg.save_path) / "student_config.yaml")
+    wandb.finish()                
 
 if __name__ == "__main__":
     main()
