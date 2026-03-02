@@ -1,21 +1,30 @@
-device: cuda:0
+run_name: Full MI Estimation
+device: cuda:1
 
-# transition_data: /data/AlexPleava/outputs/dstl_pretrain_rl/BoxPlace-Direct-v0/1/2026-02-10_00-51-50/data/training.h5
-# teacher_config: /data/AlexPleava/outputs/dstl_pretrain_rl/BoxPlace-Direct-v0/1/2026-02-10_00-51-50/params/agent.yaml
-# teacher_model: /data/AlexPleava/outputs/dstl_pretrain_rl/BoxPlace-Direct-v0/1/2026-02-10_00-51-50/models/final.pt
-transition_data: /data/AlexPleava/outputs/dstl_pretrain_rl/BoxPlace-Direct-v0/1/2026-02-18_20-01-55/data/training.h5
+training_data: /data/AlexPleava/outputs/dstl_pretrain_rl/BoxPlace-Direct-v0/1/2026-02-18_20-01-55/data/training.h5
+training_data_use_fraction: 0.1
+
+evaluation_data: /data/AlexPleava/outputs/dstl_task_collect_data/BoxPlace-Direct-v0/1/2026-02-28_20-47-37/data/training.h5
+evaluation_data_use_fraction: 0.1
+
+# Training fraction only needed if not using a dedicated eval dataset above
+training_fraction: ???
+validation_fraction: 0.5
+
 teacher_config: /data/AlexPleava/outputs/dstl_pretrain_rl/BoxPlace-Direct-v0/1/2026-02-18_20-01-55/params/agent.yaml
 teacher_model: /data/AlexPleava/outputs/dstl_pretrain_rl/BoxPlace-Direct-v0/1/2026-02-18_20-01-55/models/final.pt
 
-student_encoder_checkpoint: /data/AlexPleava/outputs/students/student_encoder_19.pt
-student_dynamics_checkpoint: /data/AlexPleava/outputs/students/student_dynamics_19.pt
-student_reward_checkpoint: /data/AlexPleava/outputs/students/student_reward_19.pt
+precompute_teacher_latents: True
+
+student_encoder_checkpoint: #/data/AlexPleava/outputs/students/student_encoder_19.pt
+student_dynamics_checkpoint: #/data/AlexPleava/outputs/students/student_dynamics_19.pt
+student_reward_checkpoint: #/data/AlexPleava/outputs/students/student_reward_19.pt
 
 action_dim: 7
 teacher_latent_dim: 512
 student_latent_dim: 20
 
-epochs: 20
+epochs: 50
 
 encoder_hidden_dim: 50
 encoder_shared_hidden_layers: 3
@@ -28,8 +37,17 @@ reward_shared_hidden_layers: 3
 
 learning_rate: 1e-4
 batch_size: 128
-beta: 1
-validation_interval: 0.1
+beta: 0
+validation_interval: 5 #epochs
+reward_ll_weight: 10
+dynamics_ll_weight: 1
 
 save_path: /data/AlexPleava/outputs/students
+use_wandb: False
 
+# MI estimation
+lmi_epochs: 10
+lmi_lr: 0.0001
+lmi_patience: 30
+lmi_latent_size: 10
+lmi_validate_fraction: 0.2

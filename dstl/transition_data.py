@@ -5,6 +5,7 @@ from torch.utils.data import Dataset
 import numpy as np
 from torch.utils.data import DataLoader, RandomSampler
 from tensordict import stack
+import tqdm
 
 class TransitionDataset(Dataset):
 	def __init__(self, path, batch_size, device="cpu", dtype=torch.float32):
@@ -12,34 +13,33 @@ class TransitionDataset(Dataset):
 		self.device = device
 		self.dtype = dtype
 		self.batch_size = batch_size
-		self.file = None
+		self.file = h5py.File(self.path, "r")
 
 		# Open once to get length
 		with h5py.File(self.path, "r") as f:
-			self.length = f["state"].shape[0]
+			self.length = f["state"].shape[0]//self.batch_size
 
-	def _ensure_open(self):
-		if self.file is None:
-			self.file = h5py.File(self.path, "r")
 
 	def __len__(self):
 		return self.length
 
 	def __getitem__(self, idx):
-		self._ensure_open()
 		f = self.file
+		start_idx = idx*self.batch_size
+		stop_idx = (idx+1)*self.batch_size
 		td = TensorDict(
 			{
-				"observation": torch.as_tensor(f["o"][idx:idx+self.batch_size], dtype=self.dtype),
-				"action": torch.as_tensor(f["a"][idx:idx+self.batch_size], dtype=self.dtype),
-				"reward": torch.as_tensor(f["r"][idx:idx+self.batch_size], dtype=self.dtype),
-				"next_observation": torch.as_tensor(f["oprime"][idx:idx+self.batch_size], dtype=self.dtype),
-				"terminated": torch.as_tensor(f["terminated"][idx:idx+self.batch_size], dtype=self.dtype),
-				"truncated": torch.as_tensor(f["truncated"][idx:idx+self.batch_size], dtype=self.dtype),
-				"state": torch.as_tensor(f["state"][idx:idx+self.batch_size], dtype=self.dtype),
-				"next_state": torch.as_tensor(f["state_prime"][idx:idx+self.batch_size], dtype=self.dtype)
+				"observation": torch.as_tensor(f["o"][start_idx:stop_idx], dtype=self.dtype),
+				"action": torch.as_tensor(f["a"][start_idx:stop_idx], dtype=self.dtype),
+				"reward": torch.as_tensor(f["r"][start_idx:stop_idx], dtype=self.dtype),
+				"next_observation": torch.as_tensor(f["oprime"][start_idx:stop_idx], dtype=self.dtype),
+				"terminated": torch.as_tensor(f["terminated"][start_idx:stop_idx], dtype=self.dtype),
+				"truncated": torch.as_tensor(f["truncated"][start_idx:stop_idx], dtype=self.dtype),
+				"state": torch.as_tensor(f["state"][start_idx:stop_idx], dtype=self.dtype),
+				"next_state": torch.as_tensor(f["state_prime"][start_idx:stop_idx], dtype=self.dtype)
 			},
 			device=self.device,
+			batch_size=self.batch_size
 		)
 		return td
 

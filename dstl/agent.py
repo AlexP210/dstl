@@ -37,8 +37,8 @@ class DSTL(torch.nn.Module):
 		self.scale = RunningScale(cfg)
 		self.cfg.iterations += 2*int(cfg.action_dim >= 20) # Heuristic for large action spaces
 		self.discount =  self._get_discount(cfg.episode_length) # TODO
-		print('Episode length:', cfg.episode_length)
-		print('Discount factor:', self.discount)
+		# print('Episode length:', cfg.episode_length)
+		# print('Discount factor:', self.discount)
 		self._prev_mean = torch.nn.Buffer(torch.zeros(self.cfg.horizon, self.cfg.action_dim, device=self.device))
 		if cfg.compile:
 			print('Compiling update function with torch.compile...')
