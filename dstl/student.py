@@ -32,7 +32,7 @@ class DiagonalCovarianceStochasticMLP(nn.Module):
     def forward(self, x):
         shared = self.shared_net(x)
         mean = self.mean_head(shared)
-        log_standard_deviation = self.log_std_head(shared).clamp(-5, 2)
+        log_standard_deviation = self.log_std_head(shared).clamp(-5, 5)
         standard_deviation = torch.exp(log_standard_deviation)
         return mean, standard_deviation
 

@@ -15,6 +15,9 @@ from torch_mist.utils.estimation import infer_dims
 from torch_mist.estimators.multi import MultiMIEstimator
 from torch_mist import estimate_mi
 
+from state import State
+# from evaluation.tasks.direct.boxplace import boxplace_env_cfg, factory_utils
+
 import warnings
 from pydantic._internal._generate_schema import UnsupportedFieldAttributeWarning
 
@@ -36,6 +39,95 @@ def diag_gaussian_log_prob(x, mean, std):
 def squeeze_collate(batch):
     return batch[0]
 
+state_order: list = [
+    "fingertip_pos",
+    "fingertip_quat",
+    "ee_linvel",
+    "ee_angvel",
+    "joint_pos",
+    "held_pos",
+    "held_pos_rel_fixed_0",
+    "held_pos_rel_fixed_1",
+    "held_pos_rel_fixed_2",
+    "held_quat",
+    "fixed_pos_0",
+    "fixed_quat_0",
+    "fixed_pos_1",
+    "fixed_quat_1",
+    "fixed_pos_2",
+    "fixed_quat_2",
+    "target_box",
+]
+
+STATE_DIM_CFG = {
+    "fingertip_pos": 3,
+    "fingertip_pos_rel_fixed_0": 3,
+    "fingertip_pos_rel_fixed_1": 3,
+    "fingertip_pos_rel_fixed_2": 3,
+    "fingertip_quat": 4,
+    "ee_linvel": 3,
+    "ee_angvel": 3,
+    "joint_pos": 7,
+    "held_pos": 3,
+    "held_pos_rel_fixed_0": 3,
+    "held_pos_rel_fixed_1": 3,
+    "held_pos_rel_fixed_2": 3,
+    "held_quat": 4,
+    "fixed_pos_0": 3,
+    "fixed_quat_0": 4,
+    "fixed_pos_1": 3,
+    "fixed_quat_1": 4,
+    "fixed_pos_2": 3,
+    "fixed_quat_2": 4,
+    "task_prop_gains": 6,
+    "ema_factor": 1,
+    "pos_threshold": 3,
+    "rot_threshold": 3,
+    "target_box": 1,
+}
+
+
+def get_reward(state:State, task_id:int):
+    toy_box_diff = state.get(f"held_pos_rel_fixed_{task_id}")
+    toy_hand_diff = state.get("held_pos") - state.get("fingertip_pos")
+    xy_dist = torch.linalg.vector_norm(toy_box_diff[:,:2], axis=-1)
+
+    xy_dist_coarse = squashing_fn(xy_dist, 5, 0)
+    xy_dist_fine = squashing_fn(xy_dist, 100, 0)
+    height = toy_box_diff[:,2]
+    xy_threshold = 0.1
+    height_diff = 0.0
+    height_threshold = 0.1
+    is_inside = torch.logical_and(
+        xy_dist < xy_threshold,
+        height - height_diff < height_threshold
+    )
+
+    is_released = torch.linalg.vector_norm(toy_hand_diff, axis=-1) > 0.1
+    is_inside_and_released = torch.logical_and(is_inside, is_released)
+
+    rew_dict = {
+        "xy_dist_coarse": xy_dist_coarse[:,None],
+        "xy_dist_fine": xy_dist_fine[:,None],
+        "inside_and_released": is_inside_and_released[:,None]
+    }
+
+    rew_scales = {
+        "xy_dist_coarse": 1/6,
+        "xy_dist_fine": 2/6,
+        "inside_and_released": 3/6
+    }
+
+    reward = torch.zeros_like(rew_dict["xy_dist_coarse"])
+    for key in rew_dict.keys():
+        reward += rew_scales[key]*rew_dict[key]
+
+    return reward
+
+def squashing_fn(x, a, b):
+    """Compute bounded reward function."""
+    return 1 / (torch.exp(a * x) + b + torch.exp(-a * x))
+
 class DistillationTrainer:
 
     def __init__(self, cfg):
@@ -51,7 +143,8 @@ class DistillationTrainer:
         self.split_datasets()
 
         # Precompute the teacher latents to save time
-        self.precompute_latents()
+        if self.cfg.precompute_teacher_latents:
+            self.precompute_latents()
 
 
     def train(self):
@@ -75,14 +168,12 @@ class DistillationTrainer:
         iterations = 0
         for epoch in (epoch_bar:=tqdm(range(self.cfg.epochs), desc="Epochs", position=0)):
             for i, train_batch in enumerate(iteration_bar:=tqdm(self.train_loader, desc="Iterations", position=1, leave=False)):
-                
                 # Performing a training iteration
                 optimizer.zero_grad()
-                # train_batch = train_batch.to(self.cfg.device)
                 loss, info = self.compute_loss(
                     batch=train_batch,
-                    teacher_latent=self.train_teacher_latents[i],
-                    next_teacher_latent=self.train_next_teacher_latents[i]
+                    teacher_latent=self.train_teacher_latents[i] if self.cfg.precompute_teacher_latents else None,
+                    next_teacher_latent=self.train_next_teacher_latents[i] if self.cfg.precompute_teacher_latents else None
                 )
                 loss.backward()
                 optimizer.step()
@@ -113,14 +204,14 @@ class DistillationTrainer:
         # Evaluation is split into validation and test based on cfg.validation_fraction
         if self.cfg.training_data != self.cfg.evaluation_data:
             # Create the training dataset (only use `training_data_use_fraction` of it)
-            training_dataset = TransitionDataset(Path(self.cfg.training_data), batch_size=self.cfg.batch_size, device=self.cfg.device)
+            training_dataset = TransitionDataset(Path(self.cfg.training_data), batch_size=self.cfg.batch_size, batch_device=self.cfg.device)
             training_idxs = np.random.choice(
                 a=len(training_dataset), size=int(self.cfg.training_data_use_fraction*len(training_dataset)), replace=False
             )
             self.training_dataset = Subset(dataset=training_dataset, indices=training_idxs)
 
             # Create the evaluation dataset (only use `evaluation_data_use_fraction` of it)
-            evaluation_dataset = TransitionDataset(Path(self.cfg.evaluation_data), batch_size=self.cfg.batch_size, device=self.cfg.device)
+            evaluation_dataset = TransitionDataset(Path(self.cfg.evaluation_data), batch_size=self.cfg.batch_size, batch_device=self.cfg.device)
             evaluation_idxs = np.random.choice(
                 a=len(evaluation_dataset), size=int(self.cfg.evaluation_data_use_fraction*len(evaluation_dataset)), replace=False
             )
@@ -141,7 +232,7 @@ class DistillationTrainer:
             assert type(self.cfg.training_fraction) == float, "When the same dataset is used for training and validation,"
             "`training_fraction` must be provided."
             # Create the dataset (only use `training_data_use_fraction` of it)
-            dataset = TransitionDataset(Path(self.cfg.training_data), batch_size=self.cfg.batch_size)
+            dataset = TransitionDataset(Path(self.cfg.training_data), batch_size=self.cfg.batch_size, batch_device=self.cfg.device)
             idxs = np.random.choice(
                 a=len(dataset), size=int(self.cfg.training_data_use_fraction*len(dataset)), replace=False
             )
@@ -230,12 +321,14 @@ class DistillationTrainer:
         # Get the student latent
         if teacher_latent is None: z = self.teacher.model.encode(batch["observation"])
         else: z = teacher_latent
+        # z.repeat(repeats=(self.cfg.latent_samples, 1, 1))
         zbar_mean, zbar_std = self.student.encoder(z)
         eps = torch.randn_like(zbar_mean)
         zbar = zbar_mean + zbar_std * eps
 
         # Concatenate the latent and action for the prediction
         a = batch["action"]
+        # a.repeat(repeats=(self.cfg.latent_samples, 1, 1))
         zbar_and_a = torch.cat([zbar, a], dim=-1)
 
         # Mean and StDev for predicted next latents & reward
@@ -243,7 +336,17 @@ class DistillationTrainer:
         predicted_r_mean, predicted_r_std = self.student.reward(zbar_and_a)
 
         # Reward LL
-        true_r = batch["reward"]
+        # true_r = batch["reward"]
+        state_vector = batch["state"]
+        state_object = State(state_vector, state_order, STATE_DIM_CFG)
+        task_id = int(state_object.get("target_box")[0,0])
+        true_r = get_reward(state_object, task_id = task_id)
+        
+        print(state_object.get("target_box"))
+        print(true_r[:5])
+        print(batch["reward"][:5])
+        print(task_id)
+        assert False
         reward_ll = diag_gaussian_log_prob(true_r, predicted_r_mean, predicted_r_std)
         
         # Next latent LL
@@ -263,6 +366,9 @@ class DistillationTrainer:
             - self.cfg.student_latent_dim
         )
         # Loss
+        mean_log_zbar_std = torch.log(zbar_std).mean()
+        mean_log_zbar_prime_std = torch.log(predicted_zbar_prime_std).mean()
+        mean_log_r_std = torch.log(predicted_r_std).mean()
         mean_reward_ll = torch.mean(reward_ll)
         mean_next_student_latent_ll = torch.mean(zbar_prime_ll)
         mean_kl = torch.mean(kl)
@@ -271,7 +377,10 @@ class DistillationTrainer:
             "loss": loss,
             "reward_ll": self.cfg.reward_ll_weight*mean_reward_ll,
             "dynamics_ll": self.cfg.dynamics_ll_weight*mean_next_student_latent_ll,
-            "kl": self.cfg.beta*mean_kl
+            "kl": self.cfg.beta*mean_kl,
+            "encoder_log_std": mean_log_zbar_std,
+            "dynamics_log_std": mean_log_zbar_prime_std,
+            "reward_log_std": mean_log_r_std,
         }
     
     def estimate_mutual_informations(self):
@@ -351,7 +460,7 @@ class DistillationTrainer:
             
             # Estimate MI with KSG
             mi_estimate = lmi.ksg.mi(Z_Xs, Z_Ys)
-            info[f"mi_{target_variable_key}"] = mi_estimate
+            info[f"mi_{target_variable_key}"] = np.mean(mi_estimate)
 
         return info
 
@@ -360,11 +469,10 @@ class DistillationTrainer:
         loss_validation_bar = tqdm(self.validation_loader, desc="Val Loss", position=2, leave=False)
         for i, validation_batch in enumerate(loss_validation_bar):
             with torch.no_grad():
-                validation_batch = validation_batch.to(self.cfg.device)
                 validation_loss, info = self.compute_loss(
                     validation_batch, 
-                    self.validation_teacher_latents[i], 
-                    self.validation_next_teacher_latents[i]
+                    self.validation_teacher_latents[i] if self.cfg.precompute_teacher_latents else None, 
+                    self.validation_next_teacher_latents[i] if self.cfg.precompute_teacher_latents else None
                 )
                 total_validation_loss += validation_loss
         info = {f"loss": total_validation_loss/len(self.validation_loader)}
@@ -376,10 +484,10 @@ class DistillationTrainer:
         self.student.requires_grad_(False)
 
         info = {}
-        # # Validation loss
-        # info.update(self.estimate_validation_loss())
-        # # Estimate MI
-        # info.update(self.estimate_mutual_informations())
+        # Validation loss
+        info.update(self.estimate_validation_loss())
+        # Estimate MI
+        info.update(self.estimate_mutual_informations())
 
         # Turn the student back to train mode
         self.student.train()
